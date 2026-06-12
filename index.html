@@ -51,12 +51,14 @@
       <span class="res" id="res-favor" title="Senate favor — keep it up, or be declared an outlaw"></span>
     </div>
     <div id="era-status" title="The state of the Imperium"></div>
+    <button id="mission-chip" type="button" title="Your current Senate mandate" style="display:none"></button>
     <nav id="topnav">
       <button id="btn-senate" type="button">Senate</button>
       <button id="btn-research" type="button">Research</button>
       <button id="btn-houses" type="button">Houses</button>
       <button id="btn-help" type="button">?</button>
       <button id="btn-menu" type="button">☰</button>
+      <button id="btn-nextfleet" type="button" title="Select next idle fleet (Tab)">▲ Fleets</button>
       <button id="btn-endturn" class="primary" type="button">End Turn ⏵</button>
     </nav>
   </header>
@@ -64,6 +66,8 @@
   <main id="main">
     <canvas id="map-canvas"></canvas>
     <aside id="side"><!-- contextual panel --></aside>
+    <div id="objectives" style="display:none"></div>
+    <div id="turn-report" style="display:none"></div>
     <div id="map-hint"></div>
   </main>
 
@@ -84,6 +88,16 @@
     <h2 id="handoff-title">Pass to the next player</h2>
     <p id="handoff-sub"></p>
     <button id="btn-handoff" class="primary big" type="button">BEGIN TURN</button>
+  </div>
+</div>
+
+<!-- dramatic epoch splash -->
+<div id="epoch" style="display:none">
+  <div class="epoch-inner">
+    <div id="epoch-kicker"></div>
+    <h2 id="epoch-title"></h2>
+    <p id="epoch-text"></p>
+    <button id="btn-epoch" class="primary big" type="button">SO BE IT</button>
   </div>
 </div>
 

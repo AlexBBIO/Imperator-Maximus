@@ -118,6 +118,14 @@
     const bAlive = sideAlive(B) && report.retreated !== B.owner;
     report.winner = aAlive && !bAlive ? A.owner : bAlive && !aAlive ? B.owner : totalHP(A.ships) >= totalHP(B.ships) + B.sbHP ? A.owner : B.owner;
 
+    // stats
+    if (state.stats[report.winner]) state.stats[report.winner].battlesWon++;
+    for (const [owner, losses] of [[A.owner, report.lossesA], [B.owner, report.lossesB]]) {
+      if (state.stats[owner]) {
+        state.stats[owner].shipsLost += Object.values(losses).reduce((a, b) => a + b, 0);
+      }
+    }
+
     // --- Write results back to the world.
     writeBack(state, atkFleets, A, report.winner === A.owner, sys, false, report);
     writeBack(state, defFleets, B, report.winner === B.owner, sys, true, report);
@@ -232,6 +240,7 @@
 
     const h = state.houses[newOwner];
     if (h) {
+      if (state.stats[newOwner]) state.stats[newOwner].conquests++;
       // Loot + glory
       const loot = 20 + sys.baseCredits * 3;
       h.credits += loot;

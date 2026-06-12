@@ -1,6 +1,7 @@
 /* Imperator Maximus — map.js
  * Canvas star map: starfield, warp lanes, systems, fleets, selection
- * highlights, pan/zoom, hover tooltips. Pure view — reports clicks to ui.js.
+ * highlights, pan/zoom, hover tooltips, and a light animation loop for
+ * pulse effects. Pure view — reports clicks to ui.js.
  */
 (function () {
   'use strict';
@@ -13,8 +14,9 @@
   let hoverSys = null;
   let onClickSystem = null; // cb(systemId | null)
   let starfield = null;
-  let highlight = { selectedSystem: null, selectedFleet: null, targets: [] };
+  let highlight = { selectedSystem: null, selectedFleet: null, reachable: {} };
   let dpr = 1;
+  let rafId = null;
 
   function init(canvasEl, callbacks) {
     canvas = canvasEl;
@@ -25,7 +27,7 @@
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     canvas.addEventListener('wheel', onWheel, { passive: false });
-    canvas.addEventListener('mouseleave', () => { hoverSys = null; draw(); });
+    canvas.addEventListener('mouseleave', () => { hoverSys = null; });
     resize();
   }
 
@@ -33,6 +35,16 @@
     state = s;
     buildStarfield();
     fit();
+    startLoop();
+  }
+
+  function startLoop() {
+    if (rafId) cancelAnimationFrame(rafId);
+    const tick = (t) => {
+      if (state && canvas.clientWidth > 0) draw(t);
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
   }
 
   function resize() {
@@ -40,7 +52,6 @@
     dpr = window.devicePixelRatio || 1;
     canvas.width = canvas.clientWidth * dpr;
     canvas.height = canvas.clientHeight * dpr;
-    draw();
   }
 
   function fit() {
@@ -57,12 +68,15 @@
     cam.scale = Math.max(0.1, Math.min(1.2, cam.scale));
     cam.x = (minX + maxX) / 2;
     cam.y = (minY + maxY) / 2;
-    draw();
+  }
+
+  function centerOn(worldX, worldY) {
+    cam.x = worldX;
+    cam.y = worldY;
   }
 
   function setHighlight(h) {
-    highlight = Object.assign({ selectedSystem: null, selectedFleet: null, targets: [] }, h);
-    draw();
+    highlight = Object.assign({ selectedSystem: null, selectedFleet: null, reachable: {} }, h);
   }
 
   // world<->screen
@@ -73,7 +87,7 @@
 
   function systemAt(px, py) {
     if (!state) return null;
-    let best = null, bestD = 22; // px radius
+    let best = null, bestD = 24; // px radius
     for (const s of Object.values(state.systems)) {
       const d = Math.hypot(sx(s.x) - px, sy(s.y) - py);
       if (d < bestD) { bestD = d; best = s; }
@@ -94,10 +108,9 @@
       if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
       cam.x = drag.cx - dx / cam.scale;
       cam.y = drag.cy - dy / cam.scale;
-      draw();
-    } else {
-      const h = systemAt(px, py);
-      if (h !== hoverSys) { hoverSys = h; draw(); }
+    } else if (e.target === canvas) {
+      hoverSys = systemAt(px, py);
+      canvas.style.cursor = hoverSys ? 'pointer' : 'grab';
     }
   }
   function onUp(e) {
@@ -121,7 +134,6 @@
     // keep point under cursor fixed
     cam.x = wxBefore - (px - canvas.clientWidth / 2) / cam.scale;
     cam.y = wyBefore - (py - canvas.clientHeight / 2) / cam.scale;
-    draw();
   }
 
   // -------------------------------------------------------------- starfield
@@ -157,13 +169,13 @@
   }
 
   // ------------------------------------------------------------------- draw
-  function draw() {
-    if (!ctx || !state) return;
+  function draw(t) {
     const w = canvas.clientWidth, h = canvas.clientHeight;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     if (starfield) ctx.drawImage(starfield, 0, 0, w, h);
 
+    const pulse = (Math.sin(t / 320) + 1) / 2; // 0..1
     const systems = Object.values(state.systems);
 
     // lanes
@@ -172,7 +184,7 @@
       for (const lid of s.links) {
         if (lid < s.id) continue; // draw each lane once
         const o = state.systems[lid];
-        ctx.strokeStyle = 'rgba(90,110,160,0.22)';
+        ctx.strokeStyle = 'rgba(90,110,160,0.20)';
         ctx.beginPath();
         ctx.moveTo(sx(s.x), sy(s.y));
         ctx.lineTo(sx(o.x), sy(o.y));
@@ -180,49 +192,53 @@
       }
     }
 
-    // movement target highlights
-    for (const tid of highlight.targets) {
+    // movement range highlights (marching ants on direct moves, faint for
+    // multi-hop reach)
+    for (const [tid, distN] of Object.entries(highlight.reachable)) {
       const s = state.systems[tid];
       if (!s) continue;
-      ctx.strokeStyle = 'rgba(232,180,64,0.85)';
-      ctx.lineWidth = 1.6;
+      const near = distN <= 1;
+      ctx.strokeStyle = near ? 'rgba(232,180,64,0.9)' : 'rgba(232,180,64,0.4)';
+      ctx.lineWidth = near ? 1.8 : 1.2;
       ctx.setLineDash([5, 4]);
+      ctx.lineDashOffset = -t / 40;
       ctx.beginPath();
       ctx.arc(sx(s.x), sy(s.y), 19, 0, Math.PI * 2);
       ctx.stroke();
       ctx.setLineDash([]);
+      ctx.lineDashOffset = 0;
     }
 
     // systems
-    for (const s of systems) {
-      drawSystem(s);
-    }
+    for (const s of systems) drawSystem(s, pulse);
 
     // fleets
-    drawFleets();
+    drawFleets(pulse);
 
     // hover tooltip
-    if (hoverSys) drawTooltip(hoverSys);
+    if (hoverSys && !drag) drawTooltip(hoverSys);
   }
 
   function ownerColor(owner) {
     return R().factionColor(owner);
   }
 
-  function drawSystem(s) {
+  function drawSystem(s, pulse) {
     const x = sx(s.x), y = sy(s.y);
     const col = ownerColor(s.owner);
     const isSel = highlight.selectedSystem === s.id;
+    const isHover = hoverSys === s;
     const r = s.isSol ? 9 : s.isCapital ? 7 : 5;
 
     // ownership glow
     if (s.owner !== 'independent') {
-      const g = ctx.createRadialGradient(x, y, 0, x, y, r * 4);
-      g.addColorStop(0, hexA(col, 0.28));
+      const breathe = s.isSol || s.isHive ? 0.22 + pulse * 0.14 : 0.26;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r * 4.2);
+      g.addColorStop(0, hexA(col, breathe));
       g.addColorStop(1, hexA(col, 0));
       ctx.fillStyle = g;
       ctx.beginPath();
-      ctx.arc(x, y, r * 4, 0, Math.PI * 2);
+      ctx.arc(x, y, r * 4.2, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -239,24 +255,21 @@
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.stroke();
 
-    // capital tick
+    // markers
+    ctx.textAlign = 'center';
     if (s.isCapital) {
       ctx.fillStyle = col;
       ctx.font = '10px sans-serif';
-      ctx.textAlign = 'center';
       ctx.fillText('★', x, y - r - 6);
     }
     if (s.isSol) {
-      ctx.fillStyle = '#ffe9b0';
-      ctx.font = '11px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('👑', x, y - r - 8);
+      ctx.font = '12px sans-serif';
+      ctx.fillText('👑', x, y - r - 9);
     }
     if (s.isHive) {
       ctx.fillStyle = '#86e04f';
-      ctx.font = '11px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('☣', x, y - r - 8);
+      ctx.font = '12px sans-serif';
+      ctx.fillText('☣', x, y - r - 9);
     }
 
     // starbase pips
@@ -264,14 +277,20 @@
       ctx.fillStyle = s.starbaseHP > 0 ? '#9fb4e8' : '#444';
       ctx.fillRect(x - 8 + i * 6, y + r + 4, 4, 3);
     }
+    // unrest marker
+    if (s.unrest > 0) {
+      ctx.fillStyle = '#ff9f43';
+      ctx.font = '9px sans-serif';
+      ctx.fillText('⚠', x + r + 7, y + 3);
+    }
 
-    // selection
-    if (isSel) {
-      ctx.strokeStyle = '#fff';
+    // selection / hover ring
+    if (isSel || isHover) {
+      ctx.strokeStyle = isSel ? '#fff' : 'rgba(255,255,255,0.4)';
       ctx.lineWidth = 1.4;
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
-      ctx.arc(x, y, r + 6, 0, Math.PI * 2);
+      ctx.arc(x, y, r + 6 + (isSel ? pulse * 1.5 : 0), 0, Math.PI * 2);
       ctx.stroke();
       ctx.setLineDash([]);
     }
@@ -279,11 +298,10 @@
     // name
     ctx.fillStyle = s.owner === 'independent' ? 'rgba(170,178,200,0.75)' : hexA(col, 0.95);
     ctx.font = (s.isSol || s.isCapital ? '600 ' : '') + '11px "Segoe UI", sans-serif';
-    ctx.textAlign = 'center';
     ctx.fillText(s.name, x, y + r + (s.starbase ? 18 : 14));
   }
 
-  function drawFleets() {
+  function drawFleets(pulse) {
     // group fleets by system
     const bySys = {};
     for (const f of Object.values(state.fleets)) {
@@ -295,27 +313,52 @@
       fleets.sort((a, b) => a.owner.localeCompare(b.owner));
       fleets.forEach((f, i) => {
         const ang = -Math.PI / 2 + (i * Math.PI * 2) / Math.max(4, fleets.length);
-        const fx = x + Math.cos(ang) * 18;
-        const fy = y + Math.sin(ang) * 18;
+        const fx = x + Math.cos(ang) * 21;
+        const fy = y + Math.sin(ang) * 21;
         const col = ownerColor(f.owner);
         const isSel = highlight.selectedFleet === f.id;
+        const canMove = state.houses[f.owner] && f.owner === state.activeHouse && f.movesLeft > 0;
+        // selection halo
+        if (isSel) {
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          ctx.arc(fx, fy, 9 + pulse * 1.6, 0, Math.PI * 2);
+          ctx.stroke();
+        }
         // triangle
         ctx.fillStyle = col;
-        ctx.strokeStyle = isSel ? '#fff' : 'rgba(0,0,0,0.6)';
-        ctx.lineWidth = isSel ? 1.6 : 1;
+        ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+        ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(fx, fy - 6);
-        ctx.lineTo(fx + 5, fy + 4);
-        ctx.lineTo(fx - 5, fy + 4);
+        ctx.moveTo(fx, fy - 7);
+        ctx.lineTo(fx + 6, fy + 5);
+        ctx.lineTo(fx - 6, fy + 5);
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
-        // ship count
+        // idle-ready dot
+        if (canMove && !isSel) {
+          ctx.fillStyle = '#fff';
+          ctx.beginPath();
+          ctx.arc(fx + 7, fy - 6, 2.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        // ship count pill
         const n = R().fleetShipCount(f);
-        ctx.fillStyle = '#0a0d16';
-        ctx.font = '600 8px sans-serif';
+        const label = n > 99 ? '99+' : String(n);
+        ctx.font = '600 9px "Segoe UI", sans-serif';
+        const tw = ctx.measureText(label).width + 8;
+        ctx.fillStyle = 'rgba(8,11,20,0.85)';
+        roundRect(fx - tw / 2, fy + 7, tw, 12, 5);
+        ctx.fill();
+        ctx.strokeStyle = hexA(col, 0.7);
+        ctx.lineWidth = 1;
+        roundRect(fx - tw / 2, fy + 7, tw, 12, 5);
+        ctx.stroke();
+        ctx.fillStyle = col;
         ctx.textAlign = 'center';
-        ctx.fillText(n > 99 ? '99' : String(n), fx, fy + 3);
+        ctx.fillText(label, fx, fy + 16);
       });
     }
   }
@@ -329,7 +372,7 @@
       `⬡${out.credits}  ⚒${out.production}  ⚗${out.science}  garrison ${Math.round(s.garrison)}`,
     ];
     if (s.starbase > 0) lines.push(`${IM.data.STARBASE[s.starbase].name} (${Math.max(0, Math.round(s.starbaseHP))} hp)`);
-    if (s.unrest > 0) lines.push(`⚠ unrest ${s.unrest}`);
+    if (s.unrest > 0) lines.push(`⚠ unrest ${s.unrest} (output halved)`);
     const fleets = R().fleetsAt(state, s.id);
     for (const f of fleets) {
       lines.push(`▲ ${R().factionName(f.owner)} — ${R().fleetShipCount(f)} ships (power ${R().fleetPower(state, f)})`);
@@ -370,7 +413,8 @@
   }
 
   IM.map = {
-    init, setState, draw, fit, setHighlight, resize,
+    init, setState, fit, setHighlight, resize, centerOn,
+    draw: () => {}, // animation loop owns drawing now
     // for console debugging / driving tests
     worldToScreen: (x, y) => ({ x: sx(x), y: sy(y) }),
   };

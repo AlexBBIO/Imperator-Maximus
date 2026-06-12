@@ -280,6 +280,7 @@
 
   function completeMission(state, hid) {
     const h = state.houses[hid];
+    if (state.stats[hid]) state.stats[hid].missionsDone++;
     const tpl = D.MISSION_TYPES[h.mission.type];
     const rw = tpl.reward;
     h.credits += rw.credits || 0;
@@ -402,7 +403,7 @@
     const sol = state.systems[state.solId];
     if (sol.owner !== 'imperium') return;
     if (state.turn % 3 !== 0) return;
-    const cap = 200;
+    const cap = 170;
     const fleets = R().fleetsAt(state, state.solId).filter((f) => f.owner === 'imperium');
     const power = fleets.reduce((a, f) => a + R().fleetPower(state, f), 0);
     if (power < cap) {

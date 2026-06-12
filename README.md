@@ -48,10 +48,14 @@ Saves go to localStorage automatically; export/import JSON saves from the ☰
 menu (sending the file to a friend after your turn = play-by-mail).
 
 **In-game `?` button has the full how-to-play.** Short version: click a
-system to build (credits up front, production = speed), click your fleet ▲
-then an adjacent system to move, clear the orbit + drop **Legions** to take
-worlds, and visit the **Senate** screen often — mandates, favor, elections,
-and dirty tricks are half the game.
+system to build (credits up front, production = speed), select your fleet ▲
+and click any highlighted system to send it there (battles halt the march),
+clear the orbit + drop **Legions** to take worlds, and visit the **Senate**
+screen often — mandates, favor, elections, and dirty tricks are half the
+game. `Tab` cycles fleets with moves left; `Enter` ends the turn; `F` fits
+the map.
+
+![The Sundering](docs/screenshot-sundering.png)
 
 ![The Senate](docs/screenshot-senate.png)
 

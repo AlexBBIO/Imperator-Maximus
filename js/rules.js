@@ -205,6 +205,61 @@
       .filter((s) => canEnter(state, fleet, s));
   }
 
+  // Would entering this system trigger a battle for the fleet? (Mirrors
+  // the combat-on-entry rule in actions.moveFleet.)
+  function entryTriggersBattle(state, fleet, sys) {
+    const enemies = fleetsAt(state, sys.id).some(
+      (f) => f.id !== fleet.id && isHostile(state, fleet.owner, f.owner)
+    );
+    const hostileBase =
+      isHostile(state, fleet.owner, sys.owner) && sys.owner !== fleet.owner &&
+      sys.starbase > 0 && sys.starbaseHP > 0;
+    return enemies || hostileBase;
+  }
+
+  // BFS over systems the fleet may enter. A defended hostile system is a
+  // valid destination but not transit (the battle on entry halts movement);
+  // undefended hostile space is open. throughHostile=true plans sieges
+  // through defended systems (AI marches that fight per-hop).
+  // Returns { dist: {id: n}, prev: {id: prevId} } out to maxDepth (0 = ∞).
+  function fleetBFS(state, fleet, maxDepth, throughHostile) {
+    const start = fleet.systemId;
+    const dist = { [start]: 0 };
+    const prev = { [start]: null };
+    const q = [start];
+    while (q.length) {
+      const cur = q.shift();
+      if (maxDepth && dist[cur] >= maxDepth) continue;
+      const curSys = state.systems[cur];
+      if (cur !== start && !throughHostile && entryTriggersBattle(state, fleet, curSys)) continue;
+      for (const nid of curSys.links) {
+        if (nid in dist) continue;
+        const sys = state.systems[nid];
+        if (!canEnter(state, fleet, sys)) continue;
+        dist[nid] = dist[cur] + 1;
+        prev[nid] = cur;
+        q.push(nid);
+      }
+    }
+    return { dist, prev };
+  }
+
+  // Next lane to take toward target (unlimited depth), or null.
+  function nextHop(state, fleet, targetId, throughHostile) {
+    const { prev } = fleetBFS(state, fleet, 0, throughHostile);
+    if (!(targetId in prev)) return null;
+    let cur = targetId;
+    while (prev[cur] !== fleet.systemId && prev[cur] !== null) cur = prev[cur];
+    return cur === fleet.systemId ? null : cur;
+  }
+
+  // Systems reachable this turn (within movesLeft), with distances.
+  function reachable(state, fleet) {
+    const { dist } = fleetBFS(state, fleet, fleet.movesLeft, false);
+    delete dist[fleet.systemId];
+    return dist;
+  }
+
   // --- Build legality
   function canBuildShip(state, sys, key) {
     const sd = D.SHIPS[key];
@@ -272,7 +327,8 @@
     buildingSlots, fleetRange, systemsOf, fleetsOf, fleetsAt, systemOutput,
     houseIncome, fleetShipCount, fleetAttack, fleetHP, fleetPower, housePower,
     fleetLegions, groundStrength, starbasePower, groundDefense, isHostile,
-    canEnter, moveTargets, canBuildShip, shipCost, buildingCost,
-    canBuildBuilding, techCost, livingHouses, countSystems,
+    canEnter, moveTargets, fleetBFS, nextHop, reachable, canBuildShip,
+    shipCost, buildingCost, canBuildBuilding, techCost, livingHouses,
+    countSystems,
   };
 })();

@@ -59,6 +59,22 @@
     return { ok: true, battle };
   }
 
+  // Move along the shortest legal path toward target, spending as many moves
+  // as available; halts on battle. Returns the last hop's result.
+  function moveFleetPath(state, houseId, fleetId, targetId) {
+    const fleet = state.fleets[fleetId];
+    if (!fleet || fleet.owner !== houseId) return err('Not your fleet.');
+    let last = err('No path to that system.');
+    let guard = 0;
+    while (state.fleets[fleetId] && state.fleets[fleetId].movesLeft > 0 && state.fleets[fleetId].systemId !== targetId && guard++ < 8) {
+      const hop = R().nextHop(state, state.fleets[fleetId], targetId);
+      if (!hop) break;
+      last = moveFleet(state, houseId, fleetId, hop);
+      if (!last.ok || last.battle) break;
+    }
+    return last;
+  }
+
   // ----------------------------------------------------------------- invade
   function invade(state, houseId, fleetId) {
     const g = guardTurn(state, houseId);
@@ -309,8 +325,8 @@
   }
 
   IM.act = {
-    moveFleet, invade, mergeFleets, splitFleet, queueShip, queueBuilding,
-    queueStarbase, cancelQueueItem, setResearch, senateAction, setBid,
-    respondMission, declareSundering,
+    moveFleet, moveFleetPath, invade, mergeFleets, splitFleet, queueShip,
+    queueBuilding, queueStarbase, cancelQueueItem, setResearch, senateAction,
+    setBid, respondMission, declareSundering,
   };
 })();

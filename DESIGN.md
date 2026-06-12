@@ -203,12 +203,34 @@ This is what makes the next step cheap:
   stays out-of-band — the game deliberately has no formal treaties, because
   the whole point is that promises between houses aren't enforceable.
 
-## 12. Future Work (post-prototype)
+## 12. UX Design Notes (from the polish pass)
 
+- **One click to anywhere in range.** Selecting a fleet highlights every
+  system reachable this turn (marching-ant rings; fainter = farther); a click
+  walks the whole path via shared BFS pathing. The same `fleetBFS` powers the
+  AI's siege marches (`throughHostile` mode fights through defended systems)
+  and the human range preview (strict mode predicts where battles stop you).
+- **Surface state, don't bury it.** The top bar carries a live mission chip,
+  an OUTLAW RISK pulse when glory/favor near the threshold, an idle-fleet
+  badge on End Turn, and a pulsing Senate button when a mandate is offered.
+- **"Since your last turn."** Between your turns, three rivals, the Senate,
+  and the Vex all act. A digest panel lists exactly what happened to *you* —
+  systems lost, battles fought against you, denouncements, epochs — instead
+  of making players scrape the log.
+- **Epoch splashes.** The Sundering, the Vex eruption, a hive burned, a house
+  destroyed: full-screen interstitials, because the game's drama beats
+  deserve more than a log line.
+- **Phase-aware objectives card** teaches the loop (expand → manage
+  glory/favor → war → crusade) and dismisses per phase.
+- **Game-over chronicle**: conquests, battles won, ships lost, mandates per
+  house — the after-action story players retell.
+
+## 13. Future Work (post-prototype)
+
+- Online multiplayer server (the engine is ready — see §11).
 - Formal non-aggression pacts with public breaking (shame mechanics) — maybe.
 - Rebellions: high-unrest worlds defecting to independents.
 - More crisis variety (Vex variants, rogue Praetor remnant if Sol falls).
 - Espionage visibility: Master of Whispers seeing rival mission targets.
 - Tactical battle choices (formations/stances) instead of pure auto-resolve.
-- Veyra buff: influence→glory conversion ("manufactured triumphs").
 - Mobile layout pass; sound; animated fleet movement.

@@ -45,6 +45,7 @@
       log: [],
       battleReports: [],
       pendingBattle: null, // last battle, for UI popup
+      stats: {}, // houseId -> {conquests, battlesWon, legionsLost, shipsLost}
     };
     attachRng(state);
 
@@ -76,6 +77,7 @@
         grudges: {},
       };
       state.houseOrder.push(hd.id);
+      state.stats[hd.id] = { conquests: 0, battlesWon: 0, shipsLost: 0, missionsDone: 0 };
       // Starting fleet at the capital
       spawnFleet(state, hd.id, capId, { corvette: 3, frigate: 2, legion: 2 }, 'House Fleet');
     });
@@ -120,6 +122,13 @@
 
   function deserialize(json) {
     const state = JSON.parse(json);
+    // migrations for saves from older builds
+    if (!state.stats) {
+      state.stats = {};
+      for (const hid of state.houseOrder) {
+        state.stats[hid] = { conquests: 0, battlesWon: 0, shipsLost: 0, missionsDone: 0 };
+      }
+    }
     attachRng(state);
     return state;
   }

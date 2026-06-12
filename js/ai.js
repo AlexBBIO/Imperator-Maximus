@@ -347,38 +347,15 @@
     A().invade(state, hid, fleet.id);
   }
 
-  // BFS one step along shortest path; returns true if a move was made.
+  // One step along the shortest siege path (fights through defended
+  // systems hop by hop); returns true if a move was made.
   function moveToward(state, hid, fid, targetId) {
     const fleet = state.fleets[fid];
     if (!fleet || fleet.systemId === targetId) return false;
-    const next = nextHop(state, fleet, targetId);
+    const next = R().nextHop(state, fleet, targetId, true);
     if (!next) return false;
     const res = A().moveFleet(state, hid, fleet.id, next);
     return res.ok;
-  }
-
-  function nextHop(state, fleet, targetId) {
-    // BFS over systems the fleet may enter. Hostile systems are valid
-    // transit nodes — entering one triggers a battle that halts movement,
-    // so a fleet "paths through" by fighting its way there turn by turn.
-    const start = fleet.systemId;
-    const prev = { [start]: null };
-    const q = [start];
-    while (q.length) {
-      const cur = q.shift();
-      if (cur === targetId) break;
-      for (const nid of state.systems[cur].links) {
-        if (nid in prev) continue;
-        const sys = state.systems[nid];
-        if (!R().canEnter(state, fleet, sys)) continue;
-        prev[nid] = cur;
-        q.push(nid);
-      }
-    }
-    if (!(targetId in prev)) return null;
-    let cur = targetId;
-    while (prev[cur] !== start && prev[cur] !== null) cur = prev[cur];
-    return cur === start ? null : cur;
   }
 
   // ---------------------------------------------------------------- analysis

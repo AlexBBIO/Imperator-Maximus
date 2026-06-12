@@ -15,6 +15,10 @@
   let aiRunning = false;
   let shownMissionOffers = new Set();
   let lastHumanSeen = null;
+  let lastLogIdxByHouse = {};
+  let lastTurnByHouse = {};
+  let epochQueue = [];
+  let lastEpochIdx = 0;
 
   const $ = (id) => document.getElementById(id);
 
@@ -34,15 +38,48 @@
     $('btn-help').onclick = () => openHelp();
     $('btn-menu').onclick = () => openMenu();
     $('btn-handoff').onclick = hideHandoff;
+    $('btn-nextfleet').onclick = nextIdleFleet;
+    $('mission-chip').onclick = () => openSenate();
+    $('btn-epoch').onclick = nextEpochSplash;
 
     IM.map.init($('map-canvas'), { onClickSystem: onMapClick });
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeModal();
-      if (e.key === 'Enter' && state && !modalOpen() && $('handoff').style.display === 'none' && !aiRunning && $('game').style.display !== 'none' && e.target.tagName !== 'INPUT') {
+      const inGame = state && $('game').style.display !== 'none';
+      const typing = e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA';
+      if (e.key === 'Escape') {
+        if ($('epoch').style.display !== 'none') { nextEpochSplash(); return; }
+        if (modalOpen()) { closeModal(); return; }
+        sel = { systemId: null, fleetId: null, splitOpen: false };
+        if (inGame) render();
+        return;
+      }
+      if (!inGame || typing || $('handoff').style.display !== 'none' || $('epoch').style.display !== 'none') return;
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        if (!modalOpen() && !aiRunning) nextIdleFleet();
+      }
+      if ((e.key === 'f' || e.key === 'F') && !modalOpen()) IM.map.fit();
+      if (e.key === 'Enter' && !modalOpen() && !aiRunning) {
         const h = state.houses[state.activeHouse];
         if (h && h.control === 'human') onEndTurn();
       }
     });
+  }
+
+  // cycle through your fleets that can still move
+  function nextIdleFleet() {
+    if (!state || !isMyTurnHuman() || aiRunning || state.gameOver) return;
+    const idle = R().fleetsOf(state, state.activeHouse).filter((f) => f.movesLeft > 0);
+    if (!idle.length) { hint('No fleets with moves left.'); return; }
+    idle.sort((a, b) => a.id.localeCompare(b.id));
+    const cur = idle.findIndex((f) => f.id === sel.fleetId);
+    const next = idle[(cur + 1) % idle.length];
+    sel.fleetId = next.id;
+    sel.systemId = next.systemId;
+    sel.splitOpen = false;
+    const s = state.systems[next.systemId];
+    IM.map.centerOn(s.x, s.y);
+    render();
   }
 
   function buildSetupScreen() {
@@ -75,13 +112,21 @@
       if (players[hd.id] === 'human') humans++;
     }
     if (humans === 0) {
-      // observer mode is allowed, but warn via hint
-      if (!confirm('No human houses selected — watch an AI-only game?')) return;
+      openConfirm('Observer mode?', 'No human houses are selected — you will watch four AIs fight for the throne.', 'Watch the fall', false, () => launchGame(seed, players));
+      return;
     }
+    launchGame(seed, players);
+  }
+
+  function launchGame(seed, players) {
     state = IM.state.newGame({ seed, players });
     IM.game = state; // exposed for console debugging / driving tests
     shownMissionOffers = new Set();
     lastHumanSeen = null;
+    lastLogIdxByHouse = {};
+    lastTurnByHouse = {};
+    epochQueue = [];
+    lastEpochIdx = state.log.length;
     sel = { systemId: null, fleetId: null, splitOpen: false };
     $('setup').style.display = 'none';
     $('game').style.display = 'flex';
@@ -100,6 +145,10 @@
     }
     shownMissionOffers = new Set();
     lastHumanSeen = null;
+    lastLogIdxByHouse = {};
+    lastTurnByHouse = {};
+    epochQueue = [];
+    lastEpochIdx = state.log.length;
     sel = { systemId: null, fleetId: null, splitOpen: false };
     $('setup').style.display = 'none';
     $('game').style.display = 'flex';
@@ -116,7 +165,7 @@
   // ============================================================== turn flow
   function beginActiveTurn() {
     render();
-    if (state.gameOver) { openGameOver(); return; }
+    if (state.gameOver) { maybeShowEpochs(); openGameOver(); return; }
     const hid = state.activeHouse;
     const h = state.houses[hid];
     if (!h) return;
@@ -129,12 +178,95 @@
       showHandoff(hid);
     }
     lastHumanSeen = hid;
+    maybeShowEpochs();
+    showTurnReport(hid);
     // auto-open senate if a mandate offer is pending
     const offerKey = hid + ':' + state.turn + ':' + (h.mission ? h.mission.type : '');
     if (h.mission && h.mission.status === 'offered' && !shownMissionOffers.has(offerKey)) {
       shownMissionOffers.add(offerKey);
       openSenate();
     }
+  }
+
+  // ------------------------------------------------- since-your-last-turn
+  function showTurnReport(hid) {
+    const el = $('turn-report');
+    el.style.display = 'none';
+    const fromIdx = lastLogIdxByHouse[hid];
+    const fromTurn = lastTurnByHouse[hid];
+    if (fromIdx === undefined) return;
+    const myName = R().factionName(hid);
+    const items = [];
+    for (const e of state.log.slice(fromIdx)) {
+      const mentionsMe = e.text.includes(myName);
+      if (e.type === 'epoch' || e.type === 'warn' || (e.type === 'conquest' && mentionsMe) || (e.type === 'senate' && mentionsMe)) {
+        let cls = e.type === 'epoch' ? 'epoch' : '';
+        if (e.type === 'conquest') cls = e.houseId === hid ? 'good' : 'bad';
+        if (e.type === 'warn' && !mentionsMe && !/Vex/.test(e.text)) continue;
+        items.push({ cls, text: e.text });
+      }
+    }
+    for (const r of state.battleReports) {
+      if (fromTurn !== undefined && r.turn >= fromTurn && (r.attacker === hid || r.defender === hid)) {
+        const mineLosses = r.attacker === hid ? r.lossesA : r.lossesB;
+        const n = Object.values(mineLosses || {}).reduce((a, b) => a + b, 0);
+        if (r.type === 'space') {
+          items.push({ cls: r.winner === hid ? 'good' : 'bad', text: `⚔ Battle of ${r.systemName}: ${R().factionName(r.winner)} holds the orbit${n ? ` (you lost ${n} ship${n > 1 ? 's' : ''})` : ''}.` });
+        } else {
+          items.push({ cls: r.captured ? (r.attacker === hid ? 'good' : 'bad') : '', text: `⬇ ${R().factionName(r.attacker)} ${r.captured ? 'took' : 'failed to take'} ${r.systemName}.` });
+        }
+      }
+    }
+    if (!items.length) return;
+    el.innerHTML = `<h4>Since your last turn<button title="Close" id="tr-close">✕</button></h4>` +
+      items.slice(-14).map((i) => `<div class="tr-entry ${i.cls}">${esc(i.text)}</div>`).join('');
+    el.style.display = '';
+    $('tr-close').onclick = () => { el.style.display = 'none'; renderObjectives(); };
+    renderObjectives();
+  }
+
+  // ------------------------------------------------------- epoch splashes
+  function classifyEpoch(text) {
+    if (/SUNDERING BEGINS/.test(text)) {
+      return { kicker: 'THE OATH IS BROKEN', title: 'THE SUNDERING', color: '#ff9d9d', text };
+    }
+    if (/VEX SWARM erupts/.test(text)) {
+      return { kicker: 'FROM THE OUTER DARK', title: 'THE VEX SWARM RISES', color: '#86e04f', text };
+    }
+    if (/burns out the Vex hive/.test(text)) {
+      return { kicker: 'THE CRUSADE IS WON', title: 'THE HIVE IS BURNED', color: '#9fd8c5', text };
+    }
+    if (/IS DESTROYED/.test(text)) {
+      const m = text.match(/^(HOUSE \w+)/i);
+      return { kicker: 'A NAME IS STRUCK FROM THE ROLLS', title: m ? m[1].toUpperCase() + ' FALLS' : 'A HOUSE FALLS', color: '#e8b440', text };
+    }
+    if (/stormed the Throneworld/.test(text)) {
+      return { kicker: 'THE THRONEWORLD', title: 'SOL HAS FALLEN', color: '#ffe9b0', text };
+    }
+    return null;
+  }
+
+  function maybeShowEpochs() {
+    while (lastEpochIdx < state.log.length) {
+      const e = state.log[lastEpochIdx++];
+      if (e.type === 'epoch') {
+        const c = classifyEpoch(e.text);
+        if (c) epochQueue.push(c);
+      }
+    }
+    if (epochQueue.length && $('epoch').style.display === 'none') {
+      const c = epochQueue.shift();
+      $('epoch-kicker').textContent = c.kicker;
+      $('epoch-title').textContent = c.title;
+      $('epoch-title').style.color = c.color;
+      $('epoch-text').textContent = c.text;
+      $('epoch').style.display = 'flex';
+    }
+  }
+
+  function nextEpochSplash() {
+    $('epoch').style.display = 'none';
+    maybeShowEpochs();
   }
 
   function countHumans() {
@@ -145,6 +277,9 @@
     if (!state || state.gameOver || aiRunning) return;
     const h = state.houses[state.activeHouse];
     if (!h || h.control !== 'human') return;
+    lastLogIdxByHouse[state.activeHouse] = state.log.length;
+    lastTurnByHouse[state.activeHouse] = state.turn;
+    $('turn-report').style.display = 'none';
     sel.fleetId = null;
     sel.splitOpen = false;
     IM.turnEngine.endHouseTurn(state);
@@ -176,6 +311,7 @@
       IM.ai.takeTurn(state, hid);
       IM.turnEngine.endHouseTurn(state);
       render();
+      maybeShowEpochs();
       setTimeout(step, 90);
     };
     setTimeout(step, 60);
@@ -223,19 +359,21 @@
       render();
       return;
     }
-    // fleet move?
+    // fleet move? (click any reachable highlighted system — multi-hop paths
+    // are walked automatically; battles halt the march)
     if (sel.fleetId) {
       const fleet = state.fleets[sel.fleetId];
       const h = state.houses[state.activeHouse];
-      if (fleet && h && h.control === 'human' && fleet.owner === state.activeHouse) {
-        const here = state.systems[fleet.systemId];
-        if (here.links.includes(systemId) && fleet.movesLeft > 0) {
-          const res = IM.act.moveFleet(state, state.activeHouse, sel.fleetId, systemId);
+      if (fleet && h && h.control === 'human' && fleet.owner === state.activeHouse && fleet.movesLeft > 0) {
+        const reach = R().reachable(state, fleet);
+        if (systemId in reach) {
+          const res = IM.act.moveFleetPath(state, state.activeHouse, sel.fleetId, systemId);
           if (res.ok) {
             sel.systemId = state.fleets[sel.fleetId] ? state.fleets[sel.fleetId].systemId : systemId;
             if (!state.fleets[sel.fleetId]) sel.fleetId = null;
             render();
             if (res.battle) openBattle(res.battle);
+            maybeShowEpochs();
             return;
           } else {
             hint(res.reason);
@@ -268,7 +406,11 @@
   function defaultHint() {
     const el = $('map-hint');
     if (!state) return;
-    el.textContent = 'Drag to pan · scroll to zoom · click a system to inspect · select a fleet, then click an adjacent system to move';
+    if (sel.fleetId && state.fleets[sel.fleetId] && state.fleets[sel.fleetId].movesLeft > 0) {
+      el.textContent = 'Click any highlighted system to move there · Tab: next fleet · Esc: deselect';
+    } else {
+      el.textContent = 'Click a system to inspect · Tab: cycle fleets · F: fit view · drag to pan, scroll to zoom';
+    }
   }
 
   // ================================================================= render
@@ -277,14 +419,13 @@
     renderTopbar();
     renderSide();
     renderLog();
-    const targets = [];
-    if (sel.fleetId && state.fleets[sel.fleetId]) {
+    renderObjectives();
+    let reachable = {};
+    if (sel.fleetId && state.fleets[sel.fleetId] && isMyTurnHuman()) {
       const fleet = state.fleets[sel.fleetId];
-      if (fleet.movesLeft > 0) {
-        for (const t of R().moveTargets(state, fleet)) targets.push(t.id);
-      }
+      if (fleet.movesLeft > 0) reachable = R().reachable(state, fleet);
     }
-    IM.map.setHighlight({ selectedSystem: sel.systemId, selectedFleet: sel.fleetId, targets });
+    IM.map.setHighlight({ selectedSystem: sel.systemId, selectedFleet: sel.fleetId, reachable });
     defaultHint();
   }
 
@@ -323,7 +464,94 @@
       era.textContent += ` · ☣ VEX×${R().countSystems(state, 'swarm')}`;
       if (!state.civilWar) era.className = 'vex';
     }
-    $('btn-endturn').disabled = aiRunning || state.gameOver || !isMyTurnHuman();
+
+    // mission chip + senate pulse
+    const chip = $('mission-chip');
+    const h2 = state.houses[state.activeHouse];
+    if (h2 && h2.mission && !state.gameOver) {
+      const m = h2.mission;
+      chip.style.display = '';
+      if (m.status === 'offered') {
+        chip.className = 'offered';
+        chip.textContent = '⚖ The Senate offers a mandate — view';
+      } else {
+        chip.className = '';
+        const left = Math.max(0, m.expiresTurn - state.turn);
+        const what = { conquer: m.targetId ? 'Take ' + state.systems[m.targetId].name : 'Conquer', muster: `Muster power ${m.amount}`, tribute: `Tribute ⬡${m.amount}`, purge: m.targetId ? 'Purge ' + state.systems[m.targetId].name : 'Purge' }[m.type];
+        chip.textContent = `⚖ ${what} · ${left}t left`;
+      }
+    } else {
+      chip.style.display = 'none';
+    }
+    $('btn-senate').className = h2 && h2.mission && h2.mission.status === 'offered' ? 'pulse' : '';
+
+    // outlaw-risk warning
+    let risk = $('outlaw-chip');
+    const inDanger = h2 && !state.civilWar && !state.gameOver &&
+      h2.glory >= C.GLORY_OUTLAW - 10 && h2.favor <= C.FAVOR_OUTLAW + 12;
+    if (inDanger) {
+      if (!risk) {
+        risk = document.createElement('span');
+        risk.id = 'outlaw-chip';
+        risk.className = 'warn-chip';
+        risk.title = `At ★${C.GLORY_OUTLAW} glory and ⚖${C.FAVOR_OUTLAW} favor or less, the Senate declares you OUTLAW. Curry favor — or arm for the war you are about to start.`;
+        era.insertAdjacentElement('afterend', risk);
+      }
+      risk.textContent = '⚠ OUTLAW RISK';
+    } else if (risk) {
+      risk.remove();
+    }
+
+    // end-turn idle fleet badge
+    const endBtn = $('btn-endturn');
+    let idleN = 0;
+    if (isMyTurnHuman() && !state.gameOver) {
+      idleN = R().fleetsOf(state, state.activeHouse).filter((f) => f.movesLeft > 0).length;
+    }
+    endBtn.innerHTML = 'End Turn ⏵' + (idleN ? `<span class="badge" title="Fleets that can still move">▲${idleN}</span>` : '');
+    $('btn-nextfleet').style.display = idleN ? '' : 'none';
+    endBtn.disabled = aiRunning || state.gameOver || !isMyTurnHuman();
+  }
+
+  // phase-aware objectives card (dismissible per phase)
+  function objectivesPhase() {
+    if (state.gameOver) return null;
+    if (state.civilWar && state.swarm.active) return 'vex';
+    if (state.civilWar) return 'war';
+    if (state.turn < 12) return 'early';
+    return 'mid';
+  }
+  function objectiveText(phase) {
+    return {
+      early: ['<li>Take nearby <b>independent worlds</b> — fleets win the orbit, <b>Legions</b> take the ground.</li>',
+        '<li>Build <b>Trade Hubs & Foundries</b>; queue ships at your capital.</li>',
+        '<li>Accept Senate <b>mandates</b> for favor, credits and glory.</li>'].join(''),
+      mid: [`<li>Watch <b>★glory vs ⚖favor</b> — at ★${C.GLORY_OUTLAW}/⚖${C.FAVOR_OUTLAW} you are outlawed and the war begins.</li>`,
+        '<li>Bid <b>influence</b> in elections; sabotage whoever grows too strong.</li>',
+        `<li>Stockpile a war chest. The Sundering comes by turn ${C.AUTO_SUNDERING_TURN}, ready or not.</li>`].join(''),
+      war: [`<li>Take <b>Sol</b> and hold it ${C.SOL_HOLD_TURNS} turns to be crowned — or destroy every rival.</li>`,
+        '<li>Concentrate your fleets; scattered squadrons die alone.</li>',
+        '<li>End it quickly. Something is stirring at the rim.</li>'].join(''),
+      vex: [`<li>The <b>Vex</b> grow while houses fight. At ${Math.round(C.SWARM_DOOM_SHARE * 100)}% of the galaxy, <b>everyone loses</b>.</li>`,
+        '<li>Burning the <b>hive ☣</b> ends them — and is worth great glory.</li>',
+        '<li>Sol still decides the throne. Balance crusade and conquest.</li>'].join(''),
+    }[phase];
+  }
+  function renderObjectives() {
+    const el = $('objectives');
+    const phase = objectivesPhase();
+    const reportOpen = $('turn-report').style.display !== 'none';
+    if (!phase || reportOpen || localStorage.getItem('im_obj_dismiss') === phase || !isMyTurnHuman()) {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = '';
+    const titles = { early: 'The Oath of Expansion', mid: 'The Long Game', war: 'THE SUNDERING', vex: 'THE GALAXY BURNS' };
+    el.innerHTML = `<h4>${titles[phase]}<button title="Dismiss" data-dismiss="${phase}">✕</button></h4><ul>${objectiveText(phase)}</ul>`;
+    el.querySelector('[data-dismiss]').onclick = (e) => {
+      localStorage.setItem('im_obj_dismiss', e.target.dataset.dismiss);
+      el.style.display = 'none';
+    };
   }
 
   function renderLog() {
@@ -371,11 +599,14 @@
 
     if (sys.buildQueue.length) {
       html += '<h3>Build queue</h3>';
+      let backlog = 0;
       sys.buildQueue.forEach((q, i) => {
         const nm = q.kind === 'ship' ? D.SHIPS[q.key].name : q.kind === 'starbase' ? 'Starbase upgrade' : D.BUILDINGS[q.key].name;
         const pct = Math.round((q.progress / q.prodCost) * 100);
-        html += `<div class="queue-item"><span style="width:110px">${nm}</span>
-          <span class="bar"><i style="width:${pct}%"></i></span><span style="width:34px;text-align:right">${pct}%</span>
+        backlog += q.prodCost - q.progress;
+        const eta = out.production > 0 ? Math.ceil(backlog / out.production) : '∞';
+        html += `<div class="queue-item"><span style="width:104px">${nm}</span>
+          <span class="bar"><i style="width:${pct}%"></i></span><span class="eta" title="Turns until complete">${eta}t</span>
           ${mine ? `<button data-cancel="${i}" title="Cancel (refund credits)">✕</button>` : ''}</div>`;
       });
     }
@@ -407,7 +638,7 @@
           html += `<div class="row" style="opacity:.5"><span class="nm" title="${esc(sd.desc)}">${sd.name}</span><span class="cost">${esc(chk.reason)}</span></div>`;
           continue;
         }
-        html += `<div class="row"><span class="nm" title="${esc(sd.desc)}">${sd.name} <span class="cost">⚔${sd.atk} ♥${sd.hp}${sd.ground ? ' ⬇' + sd.ground : ''}</span></span>
+        html += `<div class="row"><span class="nm" title="${esc(sd.desc)}">${sd.name} <span class="cost">⚔${sd.atk} ♥${sd.hp}${sd.ground ? ' ⬇' + sd.ground : ''} · ${sd.upkeep}⬡/t</span></span>
           <span class="cost">⬡${cost}</span>
           <button data-ship="${sk}" ${h.credits < cost ? 'disabled' : ''}>Build</button></div>`;
       }
@@ -423,10 +654,11 @@
           .map(([k, n]) => `${n}× ${D.SHIPS[k].name}`)
           .join(', ');
         const isSel = sel.fleetId === f.id;
+        const gs = Math.round(R().groundStrength(state, f));
         html += `<div class="fleet-card ${isSel ? 'sel' : ''}" data-fleet="${f.id}">
           <div class="fname" style="color:${col}">▲ ${esc(f.name)} <span style="color:var(--dim);font-weight:400">(${R().factionName(f.owner)})</span></div>
           <div class="fships">${ships}</div>
-          <div class="fships">power ${R().fleetPower(state, f)}${state.houses[f.owner] ? ` · moves ${f.movesLeft}` : ''}</div>`;
+          <div class="fships">⚔ power ${R().fleetPower(state, f)}${gs ? ` · ⬇ ground ${gs}` : ''}${state.houses[f.owner] ? ` · moves ${'●'.repeat(f.movesLeft) || '—'}` : ''}</div>`;
         if (isSel && f.owner === state.activeHouse && isMyTurnHuman() && !state.gameOver) {
           html += renderFleetActions(f, sys);
         }
@@ -498,6 +730,7 @@
         else if (r.battle) openBattle(r.battle);
         if (!state.fleets[sel.fleetId]) sel.fleetId = null;
         render();
+        maybeShowEpochs();
       };
     });
     side.querySelectorAll('[data-merge]').forEach((b) => {
@@ -539,6 +772,23 @@
   function closeModal() {
     $('modal-root').style.display = 'none';
     if (state && state.pendingBattle) state.pendingBattle = null;
+  }
+
+  // styled in-UI confirm
+  let confirmCb = null;
+  function openConfirm(title, body, okLabel, danger, onOk) {
+    confirmCb = onOk;
+    openModal(`<h2>${esc(title)}</h2><div class="sub" style="font-size:14px;line-height:1.6">${body}</div>
+      <div class="modal-actions">
+        <button class="${danger ? 'danger' : 'primary'}" onclick="IM.ui.confirmOk()">${esc(okLabel)}</button>
+        <button onclick="IM.ui.closeModal()">Not yet</button>
+      </div>`);
+  }
+  function confirmOk() {
+    const cb = confirmCb;
+    confirmCb = null;
+    closeModal();
+    if (cb) cb();
   }
 
   // ---- Senate
@@ -657,11 +907,17 @@
   }
 
   function declareWar() {
-    if (!confirm('Declare the Sundering? There is no going back.')) return;
-    const r = IM.act.declareSundering(state, state.activeHouse);
-    if (!r.ok) hint(r.reason);
-    closeModal();
-    render();
+    openConfirm(
+      'Declare the Sundering?',
+      'Your Senate writ burns. Every house becomes your enemy, the Praetor Fleet bars Sol, and the Vex will smell the blood. <b>There is no going back.</b>',
+      '⚔ BURN THE WRIT', true,
+      () => {
+        const r = IM.act.declareSundering(state, state.activeHouse);
+        if (!r.ok) hint(r.reason);
+        render();
+        maybeShowEpochs();
+      }
+    );
   }
 
   // ---- Research
@@ -738,6 +994,11 @@
     const dCol = R().factionColor(rep.defender);
     let html = '';
     if (rep.type === 'space') {
+      // survivors: whatever fleets remain at the system now
+      const survivors = R().fleetsAt(state, rep.systemId)
+        .filter((f) => f.owner === rep.winner)
+        .map((f) => Object.entries(f.ships).map(([k, n]) => `${n}× ${D.SHIPS[k].name}`).join(', '))
+        .join(' + ');
       html = `<h2>Battle of ${esc(rep.systemName)}</h2>
         <div class="battle-side">
           <div><h4 style="color:${aCol}">${R().factionName(rep.attacker)}</h4>${lossList(rep.lossesA)}</div>
@@ -745,7 +1006,8 @@
           <div style="text-align:right"><h4 style="color:${dCol}">${R().factionName(rep.defender)}</h4>${lossList(rep.lossesB)}</div>
         </div>
         <div class="sub" style="text-align:center">${rep.rounds.length} round(s) of fire${rep.sbDestroyed ? ' · starbase destroyed' : ''}${rep.retreated ? ` · ${R().factionName(rep.retreated)} broke off` : ''}</div>
-        <div class="battle-result" style="color:${R().factionColor(rep.winner)}">${R().factionName(rep.winner)} holds the orbit</div>`;
+        <div class="battle-result" style="color:${R().factionColor(rep.winner)}">${R().factionName(rep.winner)} holds the orbit</div>
+        ${survivors ? `<div class="sub" style="text-align:center">Survivors: ${esc(survivors)}</div>` : ''}`;
     } else {
       html = `<h2>Invasion of ${esc(rep.systemName)}</h2>
         <div class="battle-side">
@@ -812,11 +1074,11 @@
     inp.click();
   }
   function menuNew() {
-    if (!confirm('Abandon this game?')) return;
-    closeModal();
-    $('game').style.display = 'none';
-    $('setup').style.display = 'flex';
-    if (localStorage.getItem(SAVE_KEY)) $('btn-continue').style.display = '';
+    openConfirm('Abandon this game?', 'The current campaign will remain in your autosave until you start a new one.', 'Abandon', true, () => {
+      $('game').style.display = 'none';
+      $('setup').style.display = 'flex';
+      if (localStorage.getItem(SAVE_KEY)) $('btn-continue').style.display = '';
+    });
   }
 
   function openHelp() {
@@ -826,9 +1088,13 @@
       <h3>Each turn</h3>
       <div class="sub">
         • Click a system → build economy (<b>Trade Hubs, Foundries, Labs</b>), defenses, and ships. Items cost ⬡credits up front; ⚒production sets the speed.<br>
-        • Click your fleet (▲), then an adjacent system to move. Entering hostile space starts a battle.<br>
+        • Select a fleet (▲), then click <b>any highlighted system</b> — it travels the whole path automatically. Battles halt the march.<br>
         • To take a world: win the orbit, destroy any starbase, then <b>Invade</b> with Legions aboard.<br>
-        • Visit the <b>Senate</b>: mandates (missions) earn ⚖favor and ★glory; spend ❖influence to curry favor, denounce rivals, sabotage their shipyards, or rig elections for powerful offices.
+        • Visit the <b>Senate</b>: mandates (missions) earn ⚖favor and ★glory; spend ❖influence to curry favor, denounce rivals, sabotage their shipyards, stage triumphs, or rig elections for powerful offices.
+      </div>
+      <h3>Controls</h3>
+      <div class="sub">
+        <b>Tab</b> — cycle fleets with moves left · <b>Enter</b> — end turn · <b>F</b> — fit map · <b>Esc</b> — close/deselect · drag to pan, scroll to zoom
       </div>
       <h3>Glory vs Favor — the heart of the game</h3>
       <div class="sub">Conquest brings ★glory; glory wins the throne but terrifies the Senate (your ⚖favor decays faster as glory rises). At <b>★${C.GLORY_OUTLAW} / ⚖${C.FAVOR_OUTLAW} or less</b> you are declared OUTLAW and the Sundering begins immediately — ready or not. You may also declare it yourself at ★${C.GLORY_DECLARE}. If no one moves first, the Emperor dies by turn ${C.AUTO_SUNDERING_TURN} and the war comes anyway. <b>Time your treason.</b></div>
@@ -853,9 +1119,29 @@
       title = 'THE GALAXY FALLS';
       sub = `The houses fought for a throne while the Vex devoured the stars. There is no Imperium left to rule. All houses lose. (Turn ${state.turn})`;
     }
+    // chronicle of the war
+    let rows = '';
+    for (const hid of state.houseOrder) {
+      const h = state.houses[hid];
+      const hd = R().houseDef(hid);
+      const st = state.stats[hid] || {};
+      rows += `<tr ${h.eliminated && hid !== state.winner ? 'style="opacity:.45"' : ''}>
+        <td style="color:${hd.color}"><b>${hd.name}</b>${hid === state.winner ? ' 👑' : h.eliminated ? ' ✝' : ''}</td>
+        <td class="num">${R().countSystems(state, hid)}</td>
+        <td class="num">${st.conquests || 0}</td>
+        <td class="num">${st.battlesWon || 0}</td>
+        <td class="num">${st.shipsLost || 0}</td>
+        <td class="num">${st.missionsDone || 0}</td>
+        <td class="num">${h.glory}</td></tr>`;
+    }
     openModal(`<div class="gameover-title" style="color:${col}">${title}</div>
       <div class="gameover-sub">${sub}</div>
-      <div class="modal-actions" style="justify-content:center">
+      <h3>Chronicle of the war</h3>
+      <table>
+        <tr><th>House</th><th>Worlds</th><th>Conquests</th><th>Battles won</th><th>Ships lost</th><th>Mandates</th><th>★</th></tr>
+        ${rows}
+      </table>
+      <div class="modal-actions" style="justify-content:center;margin-top:18px">
         <button class="primary big" onclick="IM.ui.menuNewConfirmed()">New Game</button>
         <button onclick="IM.ui.closeModal()">Survey the wreckage</button>
       </div>`);
@@ -873,5 +1159,6 @@
   IM.ui = {
     init, render, closeModal, missionRespond, senateAct, saveBids, declareWar,
     pickTrack, menuSave, menuExport, menuImport, menuNew, menuNewConfirmed,
+    confirmOk,
   };
 })();
