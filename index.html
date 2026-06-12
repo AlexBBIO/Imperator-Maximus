@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Imperator Maximus</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>👑</text></svg>">
+</head>
+<body>
+
+<!-- ============================== SETUP ============================== -->
+<div id="setup" class="screen">
+  <div class="setup-inner">
+    <h1 class="title">IMPERATOR&nbsp;MAXIMUS</h1>
+    <p class="tagline">Serve the Senate. Conquer the stars. Then march on the Throneworld.</p>
+
+    <div class="setup-houses" id="setup-houses"><!-- house cards injected --></div>
+
+    <div class="setup-row">
+      <label>Galaxy seed
+        <input type="number" id="setup-seed" value="" placeholder="random">
+      </label>
+      <button id="btn-reroll" class="ghost" type="button">⟳ Reroll</button>
+    </div>
+
+    <div class="setup-row">
+      <button id="btn-start" class="primary big" type="button">BEGIN THE OATH OF EXPANSION</button>
+    </div>
+    <div class="setup-row">
+      <button id="btn-continue" class="ghost" type="button" style="display:none">Continue saved game</button>
+      <button id="btn-rules" class="ghost" type="button">How to play</button>
+    </div>
+    <p class="setup-foot">A game of expansion, betrayal, and one throne. 1–4 players (hotseat) + AI.</p>
+  </div>
+</div>
+
+<!-- ============================== GAME ============================== -->
+<div id="game" class="screen" style="display:none">
+  <header id="topbar">
+    <div id="banner">
+      <span id="banner-name">House</span>
+      <span id="banner-epithet"></span>
+    </div>
+    <div id="resources">
+      <span class="res" id="res-turn" title="Turn"></span>
+      <span class="res" id="res-credits" title="Credits (net income per turn)"></span>
+      <span class="res" id="res-influence" title="Influence — spend in the Senate"></span>
+      <span class="res" id="res-science" title="Science per turn"></span>
+      <span class="res" id="res-glory" title="Glory — fame from conquest. Too much and the Senate moves against you."></span>
+      <span class="res" id="res-favor" title="Senate favor — keep it up, or be declared an outlaw"></span>
+    </div>
+    <div id="era-status" title="The state of the Imperium"></div>
+    <nav id="topnav">
+      <button id="btn-senate" type="button">Senate</button>
+      <button id="btn-research" type="button">Research</button>
+      <button id="btn-houses" type="button">Houses</button>
+      <button id="btn-help" type="button">?</button>
+      <button id="btn-menu" type="button">☰</button>
+      <button id="btn-endturn" class="primary" type="button">End Turn ⏵</button>
+    </nav>
+  </header>
+
+  <main id="main">
+    <canvas id="map-canvas"></canvas>
+    <aside id="side"><!-- contextual panel --></aside>
+    <div id="map-hint"></div>
+  </main>
+
+  <footer id="logbar">
+    <div id="log"></div>
+  </footer>
+</div>
+
+<!-- modal root -->
+<div id="modal-root" style="display:none">
+  <div id="modal-backdrop"></div>
+  <div id="modal"></div>
+</div>
+
+<!-- hotseat handoff overlay -->
+<div id="handoff" style="display:none">
+  <div class="handoff-inner">
+    <h2 id="handoff-title">Pass to the next player</h2>
+    <p id="handoff-sub"></p>
+    <button id="btn-handoff" class="primary big" type="button">BEGIN TURN</button>
+  </div>
+</div>
+
+<script src="js/util.js"></script>
+<script src="js/data.js"></script>
+<script src="js/galaxy.js"></script>
+<script src="js/state.js"></script>
+<script src="js/rules.js"></script>
+<script src="js/combat.js"></script>
+<script src="js/actions.js"></script>
+<script src="js/turn.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/map.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
