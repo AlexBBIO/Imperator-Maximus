@@ -2,6 +2,8 @@
 
 *Serve the Senate. Conquer the stars. Then march on the Throneworld.*
 
+**▶ [PLAY IN YOUR BROWSER](https://raw.githack.com/AlexBBIO/Imperator-Maximus/claude/keen-mendel-7d3llw/index.html)** — no install. (For a permanent URL, enable GitHub Pages: repo **Settings → Pages → Deploy from a branch → `claude/keen-mendel-7d3llw` / root**, then play at `https://alexbbio.github.io/Imperator-Maximus/`.)
+
 A browser-based space 4X for 1–4 players (hotseat + AI), built around the
 best mechanic in **Rome: Total War** — being allies *and* rivals with the
 other great houses of an empire, racing to conquer the frontier in the
