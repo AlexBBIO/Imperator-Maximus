@@ -224,6 +224,12 @@
       IM.turnEngine.issueMission(state, houseId);
       return { ok: true };
     }
+    if (actionKey === 'triumph') {
+      h.influence -= cost;
+      h.glory = Math.min(100, h.glory + 6);
+      log(state, houseId, `${R().factionName(houseId)} stages a triumph: parades, medals, and very creative war dispatches (+6 glory).`, 'senate');
+      return { ok: true };
+    }
     if (actionKey === 'sabotage') {
       const sys = state.systems[target];
       if (!sys || !state.houses[sys.owner] || sys.owner === houseId) return err('Pick a rival system.');

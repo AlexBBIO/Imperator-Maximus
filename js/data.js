@@ -216,6 +216,10 @@
       key: 'lobby', name: 'Lobby for Mandate', cost: 15,
       desc: 'The Senate issues you a new mission immediately.',
     },
+    triumph: {
+      key: 'triumph', name: 'Manufacture a Triumph', cost: 40,
+      desc: 'Parades, medals, creative war dispatches: +6 glory.',
+    },
     sabotage: {
       key: 'sabotage', name: 'Sabotage', cost: 30, needsTarget: true,
       desc: 'Wreck the build queue of a rival system (loses all progress).',

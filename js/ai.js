@@ -109,6 +109,16 @@
     if (!h.mission && h.favor < 45 && h.influence >= Math.round(D.SENATE_ACTIONS.lobby.cost * costMult) + 20) {
       A().senateAction(state, hid, 'lobby');
     }
+
+    // Manufacture triumphs: influence-rich houses (schemers especially)
+    // convert surplus influence into glory — and houses on the cusp of
+    // their declaration threshold buy the final push to war.
+    const triumphCost = Math.round(D.SENATE_ACTIONS.triumph.cost * costMult);
+    const cusp = h.glory >= P.declareAt - 6 && h.glory < C.GLORY_DECLARE + 6 && isStrongest(state, hid, 1.15);
+    const surplus = P.inf >= 1.5 && h.glory >= 25 && h.influence > triumphCost + 80;
+    if ((cusp || surplus) && h.influence >= triumphCost && !danger) {
+      A().senateAction(state, hid, 'triumph');
+    }
   }
 
   function doBids(state, hid, P) {
