@@ -112,10 +112,65 @@
     state.activeHouse = null;
     imperiumStep(state);
     solRearm(state);
+    corsairStep(state);
     swarmStep(state);
     checkEliminations(state);
     checkLastHouseStanding(state);
     checkSwarmDoom(state);
+  }
+
+  // ================================================================ corsairs
+  // Pre-war texture: pirate squadrons raid careless house worlds. They never
+  // take territory — they win an orbit, sack the trade lanes, and vanish.
+  // Gives navies a job (and corvettes a purpose) before the Sundering.
+  function corsairStep(state) {
+    if (state.gameOver) return;
+
+    // raids stop once the galaxy is at war — bigger predators are loose
+    if (!state.civilWar && state.turn >= 8 && state.turn % 7 === 1) {
+      const nests = Object.values(state.systems).filter((s) => s.owner === 'independent' && s.ring >= 2);
+      if (nests.length) {
+        const nest = state.rng.pick(nests);
+        const size = 2 + Math.floor(state.turn / 10);
+        const f = IM.state.spawnFleet(state, 'independent', nest.id, { corvette: size, frigate: 1 + Math.floor(state.turn / 16) }, 'Corsairs');
+        f.corsair = { bornTurn: state.turn, looted: false };
+        log(state, null, `Corsair raiders have been sighted near ${nest.name}. Guard your trade worlds.`, 'warn');
+      }
+    }
+
+    for (const f of R().fleetsOf(state, 'independent')) {
+      if (!f.corsair) continue;
+      const here = state.systems[f.systemId];
+      // loot an undefended house world we sit on
+      if (state.houses[here.owner] && !f.corsair.looted) {
+        const defended =
+          R().fleetsAt(state, here.id).some((x) => x.id !== f.id && x.owner === here.owner) ||
+          (here.starbase > 0 && here.starbaseHP > 0);
+        if (!defended) {
+          const h = state.houses[here.owner];
+          const loot = Math.min(100, 20 + state.turn * 2);
+          h.credits = Math.max(0, h.credits - loot);
+          f.corsair.looted = true;
+          log(state, here.owner, `Corsairs sack the orbital trade of ${here.name} — ${R().factionName(here.owner)} loses ⬡${loot}.`, 'warn');
+        }
+      }
+      // melt away after a loot or when the spree runs long
+      if (f.corsair.looted || state.turn - f.corsair.bornTurn > 8 || state.civilWar) {
+        IM.state.removeFleet(state, f.id);
+        continue;
+      }
+      // prowl toward the nearest house-owned world
+      const prey = Object.values(state.systems)
+        .filter((s) => state.houses[s.owner])
+        .sort((a, b) => IM.util.dist(a, here) - IM.util.dist(b, here))[0];
+      if (prey && prey.id !== f.systemId) {
+        const options = here.links
+          .map((id) => state.systems[id])
+          .filter((s) => s.owner === 'independent' || state.houses[s.owner]);
+        options.sort((a, b) => IM.util.dist(a, prey) - IM.util.dist(b, prey));
+        if (options.length) npcMove(state, f, options[0]);
+      }
+    }
   }
 
   // ================================================================ economy
@@ -499,6 +554,7 @@
 
   // NPC fleet move with immediate combat, mirroring act.moveFleet.
   function npcMove(state, fleet, target) {
+    IM.bus.pushMove({ fleetId: fleet.id, owner: fleet.owner, from: fleet.systemId, to: target.id });
     fleet.systemId = target.id;
     const enemies = R()
       .fleetsAt(state, target.id)

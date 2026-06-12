@@ -10,6 +10,19 @@
 
   const SAVE_KEY = 'imperator_maximus_save_v1';
 
+  // localStorage can throw (private mode, quota) — never let that kill a turn
+  const store = {
+    get(k) {
+      try { return localStorage.getItem(k); } catch (e) { return null; }
+    },
+    set(k, v) {
+      try { localStorage.setItem(k, v); } catch (e) { /* best effort */ }
+    },
+    del(k) {
+      try { localStorage.removeItem(k); } catch (e) { /* best effort */ }
+    },
+  };
+
   let state = null;
   let sel = { systemId: null, fleetId: null, splitOpen: false };
   let aiRunning = false;
@@ -29,11 +42,12 @@
     $('btn-reroll').onclick = () => { $('setup-seed').value = String(Math.floor(Math.random() * 1e9)); };
     $('btn-rules').onclick = () => openHelp();
     $('btn-continue').onclick = continueSaved;
-    if (localStorage.getItem(SAVE_KEY)) $('btn-continue').style.display = '';
+    if (store.get(SAVE_KEY)) $('btn-continue').style.display = '';
 
     $('btn-endturn').onclick = onEndTurn;
     $('btn-senate').onclick = () => openSenate();
     $('btn-research').onclick = () => openResearch();
+    $('btn-domains').onclick = () => openDomains();
     $('btn-houses').onclick = () => openHouses();
     $('btn-help').onclick = () => openHelp();
     $('btn-menu').onclick = () => openMenu();
@@ -137,7 +151,7 @@
 
   function continueSaved() {
     try {
-      state = IM.state.deserialize(localStorage.getItem(SAVE_KEY));
+      state = IM.state.deserialize(store.get(SAVE_KEY));
       IM.game = state;
     } catch (e) {
       alert('Save file is corrupted.');
@@ -159,7 +173,7 @@
 
   function saveGame() {
     if (!state) return;
-    localStorage.setItem(SAVE_KEY, IM.state.serialize(state));
+    store.set(SAVE_KEY, IM.state.serialize(state));
   }
 
   // ============================================================== turn flow
@@ -416,6 +430,7 @@
   // ================================================================= render
   function render() {
     if (!state) return;
+    IM.map.queueMoves(IM.bus.drainMoves());
     renderTopbar();
     renderSide();
     renderLog();
@@ -511,6 +526,13 @@
     endBtn.innerHTML = 'End Turn ⏵' + (idleN ? `<span class="badge" title="Fleets that can still move">▲${idleN}</span>` : '');
     $('btn-nextfleet').style.display = idleN ? '' : 'none';
     endBtn.disabled = aiRunning || state.gameOver || !isMyTurnHuman();
+
+    // idle build queues nudge on the Domains button
+    let idleYards = 0;
+    if (isMyTurnHuman() && !state.gameOver) {
+      idleYards = R().systemsOf(state, state.activeHouse).filter((s) => !s.buildQueue.length).length;
+    }
+    $('btn-domains').innerHTML = 'Domains' + (idleYards ? `<span class="badge" style="background:rgba(255,159,67,.18);color:#ff9f43" title="Worlds with empty build queues">${idleYards}</span>` : '');
   }
 
   // phase-aware objectives card (dismissible per phase)
@@ -541,7 +563,7 @@
     const el = $('objectives');
     const phase = objectivesPhase();
     const reportOpen = $('turn-report').style.display !== 'none';
-    if (!phase || reportOpen || localStorage.getItem('im_obj_dismiss') === phase || !isMyTurnHuman()) {
+    if (!phase || reportOpen || store.get('im_obj_dismiss') === phase || !isMyTurnHuman()) {
       el.style.display = 'none';
       return;
     }
@@ -549,7 +571,7 @@
     const titles = { early: 'The Oath of Expansion', mid: 'The Long Game', war: 'THE SUNDERING', vex: 'THE GALAXY BURNS' };
     el.innerHTML = `<h4>${titles[phase]}<button title="Dismiss" data-dismiss="${phase}">✕</button></h4><ul>${objectiveText(phase)}</ul>`;
     el.querySelector('[data-dismiss]').onclick = (e) => {
-      localStorage.setItem('im_obj_dismiss', e.target.dataset.dismiss);
+      store.set('im_obj_dismiss', e.target.dataset.dismiss);
       el.style.display = 'none';
     };
   }
@@ -955,6 +977,52 @@
     openResearch();
   }
 
+  // ---- Domains: your empire at a glance
+  function openDomains() {
+    const hid = state.activeHouse;
+    const mine = R().systemsOf(state, hid);
+    if (!mine.length) { hint('You hold no worlds.'); return; }
+    mine.sort((a, b) => (b.isCapital - a.isCapital) || (R().systemOutput(state, b).production - R().systemOutput(state, a).production));
+    let rows = '';
+    for (const s of mine) {
+      const out = R().systemOutput(state, s);
+      let queue;
+      if (s.buildQueue.length) {
+        const q = s.buildQueue[0];
+        const nm = q.kind === 'ship' ? D.SHIPS[q.key].name : q.kind === 'starbase' ? 'Starbase' : D.BUILDINGS[q.key].name;
+        const backlog = s.buildQueue.reduce((a, x) => a + x.prodCost - x.progress, 0);
+        const eta = out.production > 0 ? Math.ceil(backlog / out.production) : '∞';
+        queue = `${nm}${s.buildQueue.length > 1 ? ` +${s.buildQueue.length - 1}` : ''} <span style="color:var(--dim)">(${eta}t)</span>`;
+      } else {
+        queue = '<span style="color:#ff9f43">IDLE</span>';
+      }
+      rows += `<tr class="domain-row" data-sys="${s.id}" style="cursor:pointer" title="Click to view on map">
+        <td><b>${esc(s.name)}</b>${s.isCapital ? ' ★' : ''}${s.unrest > 0 ? ' <span style="color:#ff9f43">⚠</span>' : ''}</td>
+        <td class="num">${out.credits}</td><td class="num">${out.production}</td><td class="num">${out.science}</td>
+        <td class="num">${Math.round(s.garrison)}/${s.garrisonMax}</td>
+        <td class="num">${s.starbase ? 'I'.repeat(s.starbase) : '—'}</td>
+        <td>${queue}</td>
+        <td class="num">${s.buildings.length}/${R().buildingSlots(state, hid)}</td></tr>`;
+    }
+    const inc = R().houseIncome(state, hid);
+    openModal(`<h2>Your Domains</h2>
+      <div class="sub">${mine.length} world${mine.length > 1 ? 's' : ''} · net ⬡${inc.net >= 0 ? '+' : ''}${inc.net}/turn (upkeep ${inc.upkeep}) · ⚗${inc.science}/turn · idle yards glow orange. Click a row to jump there.</div>
+      <table>
+        <tr><th>World</th><th>⬡</th><th>⚒</th><th>⚗</th><th>🛡</th><th>SB</th><th>Building</th><th>Slots</th></tr>
+        ${rows}
+      </table>`);
+    document.querySelectorAll('.domain-row').forEach((row) => {
+      row.onclick = () => {
+        const s = state.systems[row.dataset.sys];
+        closeModal();
+        sel.systemId = s.id;
+        sel.fleetId = null;
+        IM.map.centerOn(s.x, s.y);
+        render();
+      };
+    });
+  }
+
   // ---- Houses overview
   function openHouses() {
     let html = `<h2>The Great Houses</h2><div class="sub">Know your rivals. They are watching you too.</div><table>
@@ -1077,7 +1145,7 @@
     openConfirm('Abandon this game?', 'The current campaign will remain in your autosave until you start a new one.', 'Abandon', true, () => {
       $('game').style.display = 'none';
       $('setup').style.display = 'flex';
-      if (localStorage.getItem(SAVE_KEY)) $('btn-continue').style.display = '';
+      if (store.get(SAVE_KEY)) $('btn-continue').style.display = '';
     });
   }
 
@@ -1103,6 +1171,8 @@
       <h3>Pro tips</h3>
       <div class="sub">• Shipyards unlock Cruisers/Dreadnoughts and discount hulls.<br>
         • Legions decide wars — orbits are won by fleets, worlds by boots.<br>
+        • <b>Corsairs</b> raid undefended trade worlds in peacetime. A starbase or a picket squadron pays for itself.<br>
+        • The <b>Domains</b> screen shows every world and flags idle build queues — an idle yard is a wasted turn.<br>
         • Watch rivals' glory in the <b>Houses</b> screen: when someone nears ★${C.GLORY_OUTLAW}, the storm is close. Curry favor or build fleets accordingly.<br>
         • The Master of Whispers makes intrigue 40% cheaper. Denounce the leader. Sabotage their dreadnought. Deny everything.</div>`);
   }

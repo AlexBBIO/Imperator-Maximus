@@ -38,8 +38,10 @@
       return err(`${R().factionName(target.owner)} space is closed to you until the Sundering.`);
     }
 
+    const from = fleet.systemId;
     fleet.systemId = targetId;
     fleet.movesLeft -= 1;
+    IM.bus.pushMove({ fleetId: fleet.id, owner: fleet.owner, from, to: targetId });
 
     // Hostile fleets present? Space battle resolves immediately.
     const enemies = R()

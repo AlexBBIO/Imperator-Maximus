@@ -64,6 +64,10 @@ Non-player factions:
   capped strength — a hard target, but a finite one.
 - **Independent Worlds** — the frontier. Garrisoned neutrals; richer and
   tougher the farther from Sol (the far provinces are where glory is won).
+  In peacetime, **Corsair** squadrons periodically spawn at the rim and raid
+  undefended house worlds for credits — they never take territory, but they
+  give navies (and starbases) a job before the Sundering, and they vanish
+  once real war breaks out.
 - **The Vex Swarm** — the crisis faction. Erupts at the rim a few turns after
   the Sundering begins (or by turn 55 regardless). Spawns brood-fleets at its
   hive on a cycle; wave size scales with how long the civil war has lasted.
@@ -224,6 +228,15 @@ This is what makes the next step cheap:
   glory/favor → war → crusade) and dismisses per phase.
 - **Game-over chronicle**: conquests, battles won, ships lost, mandates per
   house — the after-action story players retell.
+- **Domains screen**: every owned world in one table (outputs, garrison,
+  starbase, current build + ETA), idle queues flagged orange with a count
+  badge on the toolbar, rows jump to the map. Late-game empire management
+  without map archaeology.
+- **Animated movement**: the engine emits cosmetic move events on a view-only
+  bus (`IM.bus`); the renderer slides fleet markers along lanes (~260ms/hop,
+  eased). Never serialized, never read by rules — determinism untouched.
+- **Touch-first input**: pointer events unify mouse/touch, two-finger pinch
+  zoom, responsive layout (side panel becomes a bottom sheet on phones).
 
 ## 13. Future Work (post-prototype)
 

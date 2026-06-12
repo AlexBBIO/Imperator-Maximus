@@ -141,4 +141,20 @@
   }
 
   IM.util = { makeRng, attachRng, clamp, dist, sum, deepClone, makeNamePool };
+
+  // Lightweight view-event bus. The engine pushes cosmetic events (fleet
+  // moves) here; the UI drains them to drive animations. Never serialized,
+  // never read by rules — headless sims just let it cap out.
+  IM.bus = {
+    moves: [],
+    pushMove(ev) {
+      this.moves.push(ev);
+      if (this.moves.length > 200) this.moves.shift();
+    },
+    drainMoves() {
+      const out = this.moves;
+      this.moves = [];
+      return out;
+    },
+  };
 })();

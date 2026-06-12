@@ -17,17 +17,23 @@
   let highlight = { selectedSystem: null, selectedFleet: null, reachable: {} };
   let dpr = 1;
   let rafId = null;
+  let anims = {}; // fleetId -> [{fx,fy,tx,ty,t0,dur}, ...] queued hops
+  const HOP_MS = 260;
+  const pointers = new Map(); // active pointers for pinch
+  let pinchDist = 0;
 
   function init(canvasEl, callbacks) {
     canvas = canvasEl;
     ctx = canvas.getContext('2d');
     onClickSystem = callbacks.onClickSystem;
     window.addEventListener('resize', resize);
-    canvas.addEventListener('mousedown', onDown);
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    canvas.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
     canvas.addEventListener('wheel', onWheel, { passive: false });
-    canvas.addEventListener('mouseleave', () => { hoverSys = null; });
+    canvas.addEventListener('pointerleave', () => { hoverSys = null; });
+    canvas.style.touchAction = 'none'; // we own pan/pinch
     resize();
   }
 
@@ -96,24 +102,46 @@
   }
 
   // ------------------------------------------------------------ interaction
+  // Pointer events: mouse + touch unified. Two fingers = pinch zoom.
   function onDown(e) {
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+      drag = null;
+      return;
+    }
     drag = { x: e.clientX, y: e.clientY, cx: cam.x, cy: cam.y, moved: false };
     canvas.classList.add('dragging');
   }
   function onMove(e) {
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const rect = canvas.getBoundingClientRect();
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinchDist > 0 && d > 0) {
+        const midX = (a.x + b.x) / 2 - rect.left;
+        const midY = (a.y + b.y) / 2 - rect.top;
+        zoomAround(midX, midY, d / pinchDist);
+      }
+      pinchDist = d;
+      return;
+    }
     const px = e.clientX - rect.left, py = e.clientY - rect.top;
     if (drag) {
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
       cam.x = drag.cx - dx / cam.scale;
       cam.y = drag.cy - dy / cam.scale;
-    } else if (e.target === canvas) {
+    } else if (e.target === canvas && e.pointerType !== 'touch') {
       hoverSys = systemAt(px, py);
       canvas.style.cursor = hoverSys ? 'pointer' : 'grab';
     }
   }
   function onUp(e) {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinchDist = 0;
     if (!drag) return;
     const wasDrag = drag.moved;
     drag = null;
@@ -124,16 +152,48 @@
       if (onClickSystem) onClickSystem(s ? s.id : null);
     }
   }
+  function zoomAround(px, py, factor) {
+    const wxBefore = wx(px), wyBefore = wy(py);
+    cam.scale = Math.max(0.08, Math.min(3, cam.scale * factor));
+    cam.x = wxBefore - (px - canvas.clientWidth / 2) / cam.scale;
+    cam.y = wyBefore - (py - canvas.clientHeight / 2) / cam.scale;
+  }
   function onWheel(e) {
     e.preventDefault();
     const rect = canvas.getBoundingClientRect();
-    const px = e.clientX - rect.left, py = e.clientY - rect.top;
-    const wxBefore = wx(px), wyBefore = wy(py);
-    const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-    cam.scale = Math.max(0.08, Math.min(3, cam.scale * f));
-    // keep point under cursor fixed
-    cam.x = wxBefore - (px - canvas.clientWidth / 2) / cam.scale;
-    cam.y = wyBefore - (py - canvas.clientHeight / 2) / cam.scale;
+    zoomAround(e.clientX - rect.left, e.clientY - rect.top, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+  }
+
+  // ------------------------------------------------------------- animation
+  // Queue cosmetic hop animations from the engine's move events.
+  function queueMoves(moves) {
+    if (!state) return;
+    const now = performance.now();
+    for (const ev of moves) {
+      const from = state.systems[ev.from];
+      const to = state.systems[ev.to];
+      if (!from || !to) continue;
+      const list = (anims[ev.fleetId] = anims[ev.fleetId] || []);
+      const prev = list[list.length - 1];
+      const t0 = prev ? prev.t0 + prev.dur : now;
+      list.push({ fx: from.x, fy: from.y, tx: to.x, ty: to.y, t0, dur: HOP_MS });
+    }
+  }
+
+  // Current animated world position for a fleet, or null when settled.
+  function animPos(fleetId, now) {
+    const list = anims[fleetId];
+    if (!list || !list.length) return null;
+    while (list.length && now >= list[0].t0 + list[0].dur) list.shift();
+    if (!list.length) {
+      delete anims[fleetId];
+      return null;
+    }
+    const seg = list[0];
+    if (now < seg.t0) return { x: seg.fx, y: seg.fy };
+    const k = (now - seg.t0) / seg.dur;
+    const ease = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+    return { x: seg.fx + (seg.tx - seg.fx) * ease, y: seg.fy + (seg.ty - seg.fy) * ease };
   }
 
   // -------------------------------------------------------------- starfield
@@ -302,9 +362,19 @@
   }
 
   function drawFleets(pulse) {
-    // group fleets by system
+    const now = performance.now();
+    const inFlight = {}; // fleetId -> screen pos
+    for (const fid of Object.keys(anims)) {
+      const f = state.fleets[fid];
+      if (!f) { delete anims[fid]; continue; }
+      const p = animPos(fid, now);
+      if (p) inFlight[fid] = { x: sx(p.x), y: sy(p.y) };
+    }
+
+    // group settled fleets by system
     const bySys = {};
     for (const f of Object.values(state.fleets)) {
+      if (inFlight[f.id]) continue;
       (bySys[f.systemId] = bySys[f.systemId] || []).push(f);
     }
     for (const [sid, fleets] of Object.entries(bySys)) {
@@ -313,54 +383,60 @@
       fleets.sort((a, b) => a.owner.localeCompare(b.owner));
       fleets.forEach((f, i) => {
         const ang = -Math.PI / 2 + (i * Math.PI * 2) / Math.max(4, fleets.length);
-        const fx = x + Math.cos(ang) * 21;
-        const fy = y + Math.sin(ang) * 21;
-        const col = ownerColor(f.owner);
-        const isSel = highlight.selectedFleet === f.id;
-        const canMove = state.houses[f.owner] && f.owner === state.activeHouse && f.movesLeft > 0;
-        // selection halo
-        if (isSel) {
-          ctx.strokeStyle = '#fff';
-          ctx.lineWidth = 1.6;
-          ctx.beginPath();
-          ctx.arc(fx, fy, 9 + pulse * 1.6, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-        // triangle
-        ctx.fillStyle = col;
-        ctx.strokeStyle = 'rgba(0,0,0,0.65)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(fx, fy - 7);
-        ctx.lineTo(fx + 6, fy + 5);
-        ctx.lineTo(fx - 6, fy + 5);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-        // idle-ready dot
-        if (canMove && !isSel) {
-          ctx.fillStyle = '#fff';
-          ctx.beginPath();
-          ctx.arc(fx + 7, fy - 6, 2.2, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        // ship count pill
-        const n = R().fleetShipCount(f);
-        const label = n > 99 ? '99+' : String(n);
-        ctx.font = '600 9px "Segoe UI", sans-serif';
-        const tw = ctx.measureText(label).width + 8;
-        ctx.fillStyle = 'rgba(8,11,20,0.85)';
-        roundRect(fx - tw / 2, fy + 7, tw, 12, 5);
-        ctx.fill();
-        ctx.strokeStyle = hexA(col, 0.7);
-        ctx.lineWidth = 1;
-        roundRect(fx - tw / 2, fy + 7, tw, 12, 5);
-        ctx.stroke();
-        ctx.fillStyle = col;
-        ctx.textAlign = 'center';
-        ctx.fillText(label, fx, fy + 16);
+        drawFleetMarker(f, x + Math.cos(ang) * 21, y + Math.sin(ang) * 21, pulse);
       });
     }
+    // fleets mid-lane
+    for (const [fid, p] of Object.entries(inFlight)) {
+      drawFleetMarker(state.fleets[fid], p.x, p.y, pulse);
+    }
+  }
+
+  function drawFleetMarker(f, fx, fy, pulse) {
+    const col = ownerColor(f.owner);
+    const isSel = highlight.selectedFleet === f.id;
+    const canMove = state.houses[f.owner] && f.owner === state.activeHouse && f.movesLeft > 0;
+    // selection halo
+    if (isSel) {
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(fx, fy, 9 + pulse * 1.6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // triangle
+    ctx.fillStyle = col;
+    ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(fx, fy - 7);
+    ctx.lineTo(fx + 6, fy + 5);
+    ctx.lineTo(fx - 6, fy + 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // idle-ready dot
+    if (canMove && !isSel) {
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(fx + 7, fy - 6, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // ship count pill
+    const n = R().fleetShipCount(f);
+    const label = n > 99 ? '99+' : String(n);
+    ctx.font = '600 9px "Segoe UI", sans-serif';
+    const tw = ctx.measureText(label).width + 8;
+    ctx.fillStyle = 'rgba(8,11,20,0.85)';
+    roundRect(fx - tw / 2, fy + 7, tw, 12, 5);
+    ctx.fill();
+    ctx.strokeStyle = hexA(col, 0.7);
+    ctx.lineWidth = 1;
+    roundRect(fx - tw / 2, fy + 7, tw, 12, 5);
+    ctx.stroke();
+    ctx.fillStyle = col;
+    ctx.textAlign = 'center';
+    ctx.fillText(label, fx, fy + 16);
   }
 
   function drawTooltip(s) {
@@ -413,7 +489,7 @@
   }
 
   IM.map = {
-    init, setState, fit, setHighlight, resize, centerOn,
+    init, setState, fit, setHighlight, resize, centerOn, queueMoves,
     draw: () => {}, // animation loop owns drawing now
     // for console debugging / driving tests
     worldToScreen: (x, y) => ({ x: sx(x), y: sy(y) }),

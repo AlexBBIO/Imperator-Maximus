@@ -171,7 +171,7 @@ input, select {
   50% { box-shadow: 0 0 10px 1px rgba(226, 85, 85, .5); }
 }
 #btn-senate.pulse { animation: chip-pulse 1.6s ease-in-out infinite; border-color: var(--gold); color: #ffe9b0; }
-#btn-endturn .badge {
+#topnav .badge {
   display: inline-block;
   background: rgba(0, 0, 0, .35);
   border-radius: 9px;
@@ -461,3 +461,29 @@ input, select {
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: #273150; border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ============================ small screens ============================ */
+@media (max-width: 980px) {
+  #topbar { gap: 8px; padding: 5px 8px; }
+  #banner { min-width: 0; }
+  #banner-epithet { display: none; }
+  #resources { gap: 9px; }
+  #mission-chip { max-width: 180px; }
+  #side {
+    top: auto;
+    bottom: 8px;
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-height: 46%;
+  }
+  #objectives, #turn-report { width: min(280px, 70vw); }
+  #logbar { height: 64px; }
+  #map-hint { display: none; }
+  .title { font-size: 36px; }
+}
+@media (max-width: 640px) {
+  #resources .res { font-size: 11px; }
+  #topnav button { padding: 5px 8px; font-size: 12px; }
+  #era-status { display: none; }
+}
